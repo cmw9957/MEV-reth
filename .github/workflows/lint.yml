@@ -126,9 +126,48 @@ jobs:
         with:
           toolchain: "1.93" # MSRV
       - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Show disk usage before cache restore
+        run: |
+          df -h
+          df -i
+          findmnt -T "$GITHUB_WORKSPACE"
+          findmnt -T "$RUNNER_TEMP"
+          du -xsh "$RUNNER_TEMP" || true
+          du -xsh "$GITHUB_WORKSPACE" || true
+          du -xsh "$GITHUB_WORKSPACE/target" || true
+          echo "Largest directories on /:"
+          sudo du -xhd1 / 2>/dev/null | sort -hr | head -20 || true
+          echo "Largest directories under /home:"
+          sudo du -xhd2 /home 2>/dev/null | sort -hr | head -40 || true
+          echo "Largest directories under /opt:"
+          sudo du -xhd2 /opt 2>/dev/null | sort -hr | head -40 || true
+          echo "Largest directories under $RUNNER_TEMP:"
+          du -xhd2 "$RUNNER_TEMP" 2>/dev/null | sort -hr | head -40 || true
+          echo "Largest directories under $GITHUB_WORKSPACE:"
+          du -xhd2 "$GITHUB_WORKSPACE" 2>/dev/null | sort -hr | head -40 || true
       - uses: Swatinem/rust-cache@v2
+        id: rust-cache
+        continue-on-error: true
         with:
           cache-on-failure: true
+      - name: Show disk usage after cache restore
+        if: always()
+        run: |
+          df -h
+          df -i
+          findmnt -T "$GITHUB_WORKSPACE"
+          findmnt -T "$RUNNER_TEMP"
+          echo "Largest temp files:"
+          find "$RUNNER_TEMP" -maxdepth 1 -type f -ls | sort -k7 -n | tail -20 || true
+          du -xsh "$RUNNER_TEMP" || true
+          du -xhd1 "$RUNNER_TEMP" || true
+          du -xsh "$GITHUB_WORKSPACE" || true
+          du -xsh "$GITHUB_WORKSPACE/target" || true
+          du -xsh "$GITHUB_WORKSPACE/target/debug" || true
+          du -xhd2 "$GITHUB_WORKSPACE/target" 2>/dev/null | sort -hr | head -40 || true
+      - name: Fail if cache restore failed
+        if: steps.rust-cache.outcome == 'failure'
+        run: exit 1
       - run: cargo build --bin reth --workspace
         env:
           RUSTFLAGS: -D warnings
