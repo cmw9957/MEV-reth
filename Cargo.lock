@@ -3811,6 +3811,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "exex-mev-inspect"
+version = "2.0.0"
+dependencies = [
+ "eyre",
+ "futures",
+ "reth-ethereum",
+ "reth-exex-mev",
+ "tracing",
+]
+
+[[package]]
 name = "exex-subscription"
 version = "2.0.0"
 dependencies = [
@@ -8630,7 +8641,9 @@ dependencies = [
  "alloy-consensus",
  "alloy-eips",
  "alloy-primitives",
+ "critical-section",
  "reth-ethereum-primitives",
+ "reth-execution-types",
  "reth-primitives-traits",
  "reth-storage-api",
  "reth-storage-errors",

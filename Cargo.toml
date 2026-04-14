@@ -133,6 +133,7 @@ members = [
     "examples/custom-rpc-middleware",
     "examples/db-access",
     "examples/exex-subscription",
+    "examples/exex-mev-inspect",
     "examples/exex-test",
     "examples/full-contract-state",
     "examples/manual-p2p/",
@@ -366,6 +367,7 @@ reth-evm-ethereum = { path = "crates/ethereum/evm", default-features = false }
 reth-execution-errors = { path = "crates/evm/execution-errors", default-features = false }
 reth-execution-types = { path = "crates/evm/execution-types", default-features = false }
 reth-exex = { path = "crates/exex/exex" }
+reth-exex-mev = { path = "crates/exex/mev" }
 reth-exex-test-utils = { path = "crates/exex/test-utils" }
 reth-exex-types = { path = "crates/exex/types" }
 reth-fs-util = { path = "crates/fs-util" }

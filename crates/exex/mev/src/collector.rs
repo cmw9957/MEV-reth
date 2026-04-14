@@ -1,8 +1,7 @@
-use alloy_eips::BlockHashOrNumber;
+use alloy_consensus::{BlockHeader, TxReceipt};
 use alloy_primitives::{Log, B256, b256};
+use reth_execution_types::Chain;
 use reth_primitives_traits::Receipt;
-use reth_storage_api::ReceiptProvider;
-use reth_storage_errors::provider::ProviderResult;
 use std::collections::HashSet;
 
 /// Uniswap V2 `Sync` event topic.
@@ -67,41 +66,15 @@ pub struct IndexedPoolEvent {
     pub log: Log,
 }
 
-/// Collects Uniswap V2 `Sync` and Uniswap V2/V3/V4 `Swap` logs from a block via
-/// [`ReceiptProvider::receipts_by_block`].
-///
-/// Returns `Ok(None)` if the block is not found.
-pub fn collect_pool_events_by_block<P>(
-    provider: &P,
-    block: BlockHashOrNumber,
-) -> ProviderResult<Option<Vec<IndexedPoolEvent>>>
-where
-    P: ReceiptProvider,
-{
-    let Some(receipts) = provider.receipts_by_block(block)? else {
-        return Ok(None)
-    };
-
-    Ok(Some(collect_pool_events_from_receipts(&receipts)))
-}
-
-/// Collects only the latest pool event per pool from a block via
-/// [`ReceiptProvider::receipts_by_block`].
-///
-/// Events are deduplicated by [`PoolKey`] with reverse receipt/log scanning, then returned in
-/// block order.
-pub fn collect_latest_pool_events_by_block<P>(
-    provider: &P,
-    block: BlockHashOrNumber,
-) -> ProviderResult<Option<Vec<IndexedPoolEvent>>>
-where
-    P: ReceiptProvider,
-{
-    let Some(receipts) = provider.receipts_by_block(block)? else {
-        return Ok(None)
-    };
-
-    Ok(Some(collect_latest_pool_events_from_receipts(&receipts)))
+/// Latest pool events extracted from a single committed block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockPoolEvents {
+    /// Block number the events came from.
+    pub block_number: u64,
+    /// Block hash the events came from.
+    pub block_hash: B256,
+    /// Latest pool events for that block.
+    pub events: Vec<IndexedPoolEvent>,
 }
 
 /// Collects Uniswap V2 `Sync` and Uniswap V2/V3/V4 `Swap` logs from the given receipts.
@@ -163,6 +136,23 @@ where
     latest_events
 }
 
+/// Collects latest pool events for each block in a committed chain without re-querying receipts
+/// from a provider.
+pub fn collect_latest_pool_events_for_chain<N>(chain: &Chain<N>) -> Vec<BlockPoolEvents>
+where
+    N: reth_primitives_traits::NodePrimitives,
+    N::Receipt: Receipt + TxReceipt<Log = Log>,
+{
+    chain
+        .blocks_and_receipts()
+        .map(|(block, receipts)| BlockPoolEvents {
+            block_number: block.header().number(),
+            block_hash: block.hash(),
+            events: collect_latest_pool_events_from_receipts(receipts),
+        })
+        .collect()
+}
+
 fn classify_log(log: &Log) -> Option<(DexPoolEventKind, PoolKey)> {
     match log.topics().first().copied()? {
         UNISWAP_V2_SYNC_TOPIC => Some((DexPoolEventKind::V2Sync, log.address.into_word())),
@@ -184,56 +174,8 @@ const fn protocol_for_event_kind(kind: DexPoolEventKind) -> DexSwapProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_eips::BlockHashOrNumber;
     use alloy_primitives::{Address, Bytes};
     use reth_ethereum_primitives::Receipt as EthReceipt;
-    use reth_storage_api::ReceiptProvider;
-    use reth_storage_errors::provider::ProviderResult;
-    use std::collections::BTreeMap;
-
-    #[derive(Debug, Default)]
-    struct MockReceiptProvider {
-        receipts: BTreeMap<u64, Vec<EthReceipt>>,
-    }
-
-    impl ReceiptProvider for MockReceiptProvider {
-        type Receipt = EthReceipt;
-
-        fn receipt(&self, _id: u64) -> ProviderResult<Option<Self::Receipt>> {
-            unimplemented!("not needed for these tests")
-        }
-
-        fn receipt_by_hash(
-            &self,
-            _hash: alloy_primitives::TxHash,
-        ) -> ProviderResult<Option<Self::Receipt>> {
-            unimplemented!("not needed for these tests")
-        }
-
-        fn receipts_by_block(
-            &self,
-            block: BlockHashOrNumber,
-        ) -> ProviderResult<Option<Vec<Self::Receipt>>> {
-            match block {
-                BlockHashOrNumber::Number(number) => Ok(self.receipts.get(&number).cloned()),
-                BlockHashOrNumber::Hash(_) => Ok(None),
-            }
-        }
-
-        fn receipts_by_tx_range(
-            &self,
-            _range: impl core::ops::RangeBounds<u64>,
-        ) -> ProviderResult<Vec<Self::Receipt>> {
-            unimplemented!("not needed for these tests")
-        }
-
-        fn receipts_by_block_range(
-            &self,
-            _block_range: core::ops::RangeInclusive<u64>,
-        ) -> ProviderResult<Vec<Vec<Self::Receipt>>> {
-            unimplemented!("not needed for these tests")
-        }
-    }
 
     #[test]
     fn filters_v2_sync_and_swap_topics_from_receipts() {
@@ -271,38 +213,6 @@ mod tests {
         assert_eq!(swap_events[3].kind, DexPoolEventKind::V4Swap);
         assert_eq!(swap_events[3].tx_index, 1);
         assert_eq!(swap_events[3].log_index, 1);
-    }
-
-    #[test]
-    fn loads_receipts_for_block_via_provider() {
-        let mut provider = MockReceiptProvider::default();
-        provider.receipts.insert(
-            42,
-            vec![receipt_with_logs(vec![
-                log_with_topic(UNISWAP_V3_SWAP_TOPIC),
-                log_with_topic(UNISWAP_V2_SYNC_TOPIC),
-                log_with_topic(UNISWAP_V2_SWAP_TOPIC),
-            ])],
-        );
-
-        let swap_events = collect_pool_events_by_block(&provider, BlockHashOrNumber::Number(42))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(swap_events.len(), 3);
-        assert_eq!(swap_events[0].kind, DexPoolEventKind::V3Swap);
-        assert_eq!(swap_events[1].kind, DexPoolEventKind::V2Sync);
-        assert_eq!(swap_events[2].kind, DexPoolEventKind::V2Swap);
-    }
-
-    #[test]
-    fn returns_none_when_block_is_missing() {
-        let provider = MockReceiptProvider::default();
-
-        let swap_events = collect_pool_events_by_block(&provider, BlockHashOrNumber::Number(7))
-            .unwrap();
-
-        assert!(swap_events.is_none());
     }
 
     #[test]
